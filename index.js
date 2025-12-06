@@ -25,7 +25,33 @@ async function run() {
     // Connect the client to the server	(optional starting in v4.7)
     await client.connect();
 const db = client.db('contestDB');
-const contestCollection = db.collection('contest')
+const usersCollection = db.collection('user')
+
+
+// save or update user info
+
+app.post('/user', async(req, res)=>{
+  const userData = req.body;
+  userData.created_at = new Date().toISOString;
+  userData.last_loggedIn = new Date().toISOString;
+  const query = {
+    email: userData.email
+  }
+
+  const alreadyExist = await usersCollection.findOne(query);
+  if(alreadyExist){
+    const result = await usersCollection.updateOne(query, {
+      $set: {
+        last_loggedIn : new Date().toISOString,
+      }
+    })
+    return res.send(result)
+
+  }
+
+  const result = await usersCollection.insertOne(userData);
+  res.send(result);
+})
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
