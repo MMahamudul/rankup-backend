@@ -32,8 +32,10 @@ const usersCollection = db.collection('user')
 
 app.post('/user', async(req, res)=>{
   const userData = req.body;
-  userData.created_at = new Date().toISOString;
-  userData.last_loggedIn = new Date().toISOString;
+  userData.created_at = new Date().toISOString();
+  userData.last_loggedIn = new Date().toISOString();
+  userData.role = 'user';
+
   const query = {
     email: userData.email
   }
@@ -42,7 +44,7 @@ app.post('/user', async(req, res)=>{
   if(alreadyExist){
     const result = await usersCollection.updateOne(query, {
       $set: {
-        last_loggedIn : new Date().toISOString,
+        last_loggedIn : new Date().toISOString(),
       }
     })
     return res.send(result)
@@ -51,6 +53,14 @@ app.post('/user', async(req, res)=>{
 
   const result = await usersCollection.insertOne(userData);
   res.send(result);
+})
+
+// find out user role and manipulating the role
+
+app.get('/user/role/:email', async(req, res)=>{
+  const email = req.params.email;
+  const result = await usersCollection.findOne({email})
+  res.send({role: result?.role})
 })
 
     // Send a ping to confirm a successful connection
