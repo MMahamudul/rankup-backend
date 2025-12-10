@@ -1,36 +1,33 @@
 const express = require('express');
 const app = express();
 const cors = require('cors');
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 require('dotenv').config();
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const admin = require('firebase-admin');
 
 const port = process.env.PORT || 3000;
 
 //  CORS FIX (for credentials)
 app.use(
-  cors({
-    origin: 'http://localhost:5176',
+  cors( {
+    origin: [process.env.CLIENT_DOMAIN],
     credentials: true,
-  })
+  } )
 );
 app.use(express.json());
 
 //  FIREBASE ADMIN INIT (ONLY ONCE)
 try {
- /*  const decoded = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString('utf-8');
+  const decoded = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString('utf-8');
   console.log(' Firebase key loaded');
 
   const serviceAccount = JSON.parse(decoded);
 
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
-  }); */
-  const serviceAccount = require('./serviceAccountKey.json');
-
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-});
+  });
+  
 
 } catch (err) {
   console.error(' Firebase Admin Init Failed:', err.message);
@@ -71,7 +68,30 @@ async function run() {
 
   const db = client.db('contestDB');
   const usersCollection = db.collection('user');
+  const contestsCollection = db.collection('contest');
+  const ordersCollection = db.collection('orders');
 
+// SAVE CONTESTS POSTED BY CREATOR
+app.post('/add-contest', async(req, res)=>{
+  const contestData = req.body;
+  const result = await contestsCollection.insertOne(contestData);
+  res.send(result)
+})
+
+// GET CONTEST IN ALL CONTEST PAGE 
+
+app.get('/contests', async(req, res)=>{
+  const result= await contestsCollection.find().toArray();
+  res.send(result)
+})
+
+// CONTEST DETAILS PAGE
+
+app.get('/contests/:id', async(req, res)=>{
+  const id = req.params.id
+  const result= await contestsCollection.findOne({_id: new ObjectId(id)});
+  res.send(result)
+})
   // SAVE OR UPDATE USER
   app.post('/user', async (req, res) => {
     const userData = req.body;
@@ -100,6 +120,121 @@ async function run() {
 
     res.send({ role: result?.role || 'user' });
   });
+// PAYMENT ENDPOINTS
+
+app.post('/create-checkout-session', async (req, res) => {
+  
+  const paymentInfo = req.body;
+  
+  const session = await stripe.checkout.sessions.create({
+    line_items: [
+      {
+        
+        price_data: {
+          currency: 'usd',
+          product_data:{
+            name: paymentInfo?.name,
+            description: paymentInfo?.description,
+            images:[paymentInfo.image]
+
+          },
+          unit_amount: paymentInfo?.price * 100,
+        },
+        quantity: paymentInfo?.quantity,
+      },
+    ],
+    customer_email:paymentInfo?.customer?.email ,
+    mode: 'payment',
+    metadata: {
+      contestId: paymentInfo?.contestId,
+      customer: paymentInfo?.customer.email,
+    },
+    success_url: `${process.env.CLIENT_DOMAIN}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${process.env.CLIENT_DOMAIN}/contest/${paymentInfo?.contestId}`,
+  })
+  res.send({url:session.url})
+}) 
+
+
+/* app.post('/payment-success', async(req, re)=>{
+  const {session_id} = req.body;
+  const session = await stripe.checkout.sessions.retrieve(req.query.session_id);
+  const contest = await contestsCollection.findOne({_id: new ObjectId(session.metadata.contestId)});
+
+  if(session.status === 'complete' && contest){
+    const orderInfo ={
+      contestId: session.metadata.contestId,
+      transactionId: session.payment_intent,
+      customer:session.metadata.customer,
+      status: 'pending',
+      creator: contest.creator,
+      name: contest.name,
+      category: contest.category,
+      quantity: 1,
+      price: session.amount_total/100
+    }
+    const result = await ordersCollection.insertOne(orderInfo)
+    console.log(result)
+  }
+
+}) */
+ app.post('/payment-success', async (req, res) => {
+  try {
+    const { session_id } = req.body;
+
+    if (!session_id) {
+      return res.status(400).send({ message: 'Missing session_id' });
+    }
+
+    // Get session info from Stripe
+    const session = await stripe.checkout.sessions.retrieve(session_id);
+
+    // Find the contest from DB
+    const contest = await contestsCollection.findOne({
+      _id: new ObjectId(session.metadata.contestId),
+    });
+
+    if (!contest) {
+      return res.status(404).send({ message: 'Contest not found' });
+    }
+
+    // Check payment status
+    if (session.payment_status === 'paid') {
+      const orderInfo = {
+        contestId: session.metadata.contestId,
+        transactionId: session.payment_intent,
+        customer: session.metadata.customer,
+        status: 'pending',
+        creator: contest.creator,        // make sure contest has 'creator'
+        name: contest.name,
+        category: contest.category,
+        quantity: 1,
+        price: session.amount_total / 100,
+        createdAt: new Date().toISOString(),
+      };
+
+      const result = await ordersCollection.insertOne(orderInfo);
+      console.log('Order saved:', result.insertedId);
+
+      return res.send({
+        success: true,
+        orderId: result.insertedId,
+      });
+    } else {
+      return res.status(400).send({
+        success: false,
+        message: 'Payment not completed',
+        payment_status: session.payment_status,
+      });
+    }
+  } catch (err) {
+    console.error('Payment success error:', err);
+    return res.status(500).send({
+      message: 'Internal Server Error while verifying payment',
+      error: err.message,
+    });
+  }
+});
 
   console.log(' MongoDB connected');
 }
