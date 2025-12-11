@@ -72,11 +72,15 @@ async function run() {
   const ordersCollection = db.collection('orders');
 
 // SAVE CONTESTS POSTED BY CREATOR
-app.post('/add-contest', async(req, res)=>{
+
+app.post('/add-contest', async (req, res) => {
   const contestData = req.body;
+
+  contestData.participant = 0;
+
   const result = await contestsCollection.insertOne(contestData);
-  res.send(result)
-})
+  res.send(result);
+});
 
 // GET CONTEST IN ALL CONTEST PAGE 
 
@@ -120,6 +124,21 @@ app.get('/contests/:id', async(req, res)=>{
 
     res.send({ role: result?.role || 'user' });
   });
+// GET USER'S PARTICIPATED CONTESTS
+app.get('/my-contests/:email', async(req, res)=>{
+  const email = req.params.email;
+  const result = await ordersCollection.find({customer: email}).toArray();
+  res.send(result)
+
+})
+// GET CREATOR'S CREATED CONTEST
+app.get('/handle-contests/:email', async(req, res)=>{
+  const email = req.params.email;
+  const result = await contestsCollection.find({'creator.email': email}).toArray();
+  res.send(result)
+
+})
+
 // PAYMENT ENDPOINTS
 
 app.post('/create-checkout-session', async (req, res) => {
@@ -155,30 +174,8 @@ app.post('/create-checkout-session', async (req, res) => {
   res.send({url:session.url})
 }) 
 
-
-/* app.post('/payment-success', async(req, re)=>{
-  const {session_id} = req.body;
-  const session = await stripe.checkout.sessions.retrieve(req.query.session_id);
-  const contest = await contestsCollection.findOne({_id: new ObjectId(session.metadata.contestId)});
-
-  if(session.status === 'complete' && contest){
-    const orderInfo ={
-      contestId: session.metadata.contestId,
-      transactionId: session.payment_intent,
-      customer:session.metadata.customer,
-      status: 'pending',
-      creator: contest.creator,
-      name: contest.name,
-      category: contest.category,
-      quantity: 1,
-      price: session.amount_total/100
-    }
-    const result = await ordersCollection.insertOne(orderInfo)
-    console.log(result)
-  }
-
-}) */
- app.post('/payment-success', async (req, res) => {
+// PAYMENT SUCCESS
+app.post('/payment-success', async (req, res) => {
   try {
     const { session_id } = req.body;
 
@@ -186,10 +183,10 @@ app.post('/create-checkout-session', async (req, res) => {
       return res.status(400).send({ message: 'Missing session_id' });
     }
 
-    // Get session info from Stripe
+    // 1) Get session info from Stripe
     const session = await stripe.checkout.sessions.retrieve(session_id);
 
-    // Find the contest from DB
+    // 2) Find the contest
     const contest = await contestsCollection.findOne({
       _id: new ObjectId(session.metadata.contestId),
     });
@@ -198,35 +195,59 @@ app.post('/create-checkout-session', async (req, res) => {
       return res.status(404).send({ message: 'Contest not found' });
     }
 
-    // Check payment status
-    if (session.payment_status === 'paid') {
-      const orderInfo = {
-        contestId: session.metadata.contestId,
-        transactionId: session.payment_intent,
-        customer: session.metadata.customer,
-        status: 'pending',
-        creator: contest.creator,        // make sure contest has 'creator'
-        name: contest.name,
-        category: contest.category,
-        quantity: 1,
-        price: session.amount_total / 100,
-        createdAt: new Date().toISOString(),
-      };
+    // 3) Check if order already exists (important for refresh / double-call)
+    const existingOrder = await ordersCollection.findOne({
+      transactionId: session.payment_intent,
+    });
 
-      const result = await ordersCollection.insertOne(orderInfo);
-      console.log('Order saved:', result.insertedId);
-
-      return res.send({
-        success: true,
-        orderId: result.insertedId,
-      });
-    } else {
+    // 4) Only proceed if payment is paid
+    if (session.payment_status !== 'paid') {
       return res.status(400).send({
         success: false,
         message: 'Payment not completed',
         payment_status: session.payment_status,
       });
     }
+
+    let orderId;
+
+    // 5) If no order yet -> create one & increment participant
+    if (!existingOrder) {
+      const orderInfo = {
+        contestId: session.metadata.contestId,
+        transactionId: session.payment_intent,
+        customer: session.metadata.customer,
+        status: 'pending',
+        creator: contest.creator,
+        name: contest.name,
+        image:contest?.image,
+        deadline:contest?.deadline,
+        category: contest.category,
+        participant: 1,
+        price: session.amount_total / 100,
+        createdAt: new Date().toISOString(),
+      };
+
+      const result = await ordersCollection.insertOne(orderInfo);
+
+      // 6) Increment contest participant
+      await contestsCollection.updateOne(
+        { _id: new ObjectId(session.metadata.contestId) },
+        { $inc: { participant: 1 } }  
+      );
+
+      orderId = result.insertedId;
+    } else {
+      // If order already exists, just reuse its ID
+      orderId = existingOrder._id;
+    }
+
+    // 7) Always return success for a valid, paid session
+    return res.send({
+      success: true,
+      transactionId: session.payment_intent,
+      orderId,
+    });
   } catch (err) {
     console.error('Payment success error:', err);
     return res.status(500).send({
@@ -235,6 +256,8 @@ app.post('/create-checkout-session', async (req, res) => {
     });
   }
 });
+
+
 
   console.log(' MongoDB connected');
 }
