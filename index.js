@@ -73,14 +73,23 @@ async function run() {
 
 // SAVE CONTESTS POSTED BY CREATOR
 
-app.post('/add-contest', async (req, res) => {
-  const contestData = req.body;
+app.post('/add-contest', verifyJWT, async (req, res) => {
+  const email = req.tokenEmail;
+  const user = await usersCollection.findOne({ email });
 
+  if (!user || (user.role !== "creator" && user.role !== "admin")) {
+    return res.status(403).send({ message: "Forbidden: not a creator" });
+  }
+
+  const contestData = req.body;
   contestData.participant = 0;
+  contestData.status = "pending"; 
 
   const result = await contestsCollection.insertOne(contestData);
   res.send(result);
 });
+
+
 // GET ALL APPROVED CONTESTS TO ALL CONTEST PAGE
 app.get('/all-contests',verifyJWT, async(req, res)=>{
   const result= await contestsCollection.find({ status: "approved" }).toArray();
