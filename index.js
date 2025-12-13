@@ -82,10 +82,10 @@ app.post('/add-contest', async (req, res) => {
   res.send(result);
 });
 
-// GET CONTEST IN ALL CONTEST PAGE 
+// GET CONTEST FOR ADMIN APPROVAL
 
-app.get('/contests', async(req, res)=>{
-  const result= await contestsCollection.find().toArray();
+app.get('/manage-contest',verifyJWT, async(req, res)=>{
+  const result= await contestsCollection.find({ status: "pending" }).toArray();
   res.send(result)
 })
 
@@ -96,6 +96,18 @@ app.get('/contests/:id', async(req, res)=>{
   const result= await contestsCollection.findOne({_id: new ObjectId(id)});
   res.send(result)
 })
+
+// UPDATE USER ROLE AND APPROVE CONTESTS
+app.patch('/approve-contests/:id', verifyJWT, async (req, res)=>{
+  const id = req.params.id;
+  const result = await contestsCollection.updateOne(
+    {_id: new ObjectId(id)},
+    {$set: {status: 'approved'}}
+  )
+  res.send(result)
+
+})
+
   // SAVE OR UPDATE USER
   app.post('/user', async (req, res) => {
     const userData = req.body;
@@ -118,16 +130,17 @@ app.get('/contests/:id', async(req, res)=>{
   });
 
   //  GET USER ROLE
-  app.get('/user/role/:email', async (req, res) => {
+  app.get('/user/role', verifyJWT, async (req, res) => {
     const email = req.params.email;
-    const result = await usersCollection.findOne({ email });
+    const result = await usersCollection.findOne({ email: req.tokenEmail });
 
     res.send({ role: result?.role || 'user' });
   });
-// GET USER'S PARTICIPATED CONTESTS
-app.get('/my-contests/:email', async(req, res)=>{
-  const email = req.params.email;
-  const result = await ordersCollection.find({customer: email}).toArray();
+
+  // GET USER'S PARTICIPATED CONTESTS
+app.get('/my-contests', verifyJWT, async(req, res)=>{
+  
+  const result = await ordersCollection.find({customer: req.tokenEmail}).toArray();
   res.send(result)
 
 })
