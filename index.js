@@ -8,7 +8,7 @@ const admin = require('firebase-admin');
 
 const port = process.env.PORT || 3000;
 
-//  CORS FIX (for credentials)
+//  CORS (for credentials)
 app.use(
   cors( {
     origin: [process.env.CLIENT_DOMAIN],
@@ -17,7 +17,7 @@ app.use(
 );
 app.use(express.json());
 
-//  FIREBASE ADMIN INIT (ONLY ONCE)
+//  FIREBASE ADMIN INIT 
 try {
   const decoded = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString('utf-8');
   console.log(' Firebase key loaded');
@@ -81,6 +81,12 @@ app.post('/add-contest', async (req, res) => {
   const result = await contestsCollection.insertOne(contestData);
   res.send(result);
 });
+// GET ALL APPROVED CONTESTS TO ALL CONTEST PAGE
+app.get('/all-contests',verifyJWT, async(req, res)=>{
+  const result= await contestsCollection.find({ status: "approved" }).toArray();
+  res.send(result)
+})
+
 
 // GET CONTEST FOR ADMIN APPROVAL
 
@@ -97,7 +103,7 @@ app.get('/contests/:id', async(req, res)=>{
   res.send(result)
 })
 
-// UPDATE USER ROLE AND APPROVE CONTESTS
+// APPROVE CONTESTS BY ADMIN
 app.patch('/approve-contests/:id', verifyJWT, async (req, res)=>{
   const id = req.params.id;
   const result = await contestsCollection.updateOne(
