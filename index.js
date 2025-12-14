@@ -95,6 +95,12 @@ app.get('/all-contests',verifyJWT, async(req, res)=>{
   const result= await contestsCollection.find({ status: "approved" }).toArray();
   res.send(result)
 })
+// GET ALL USERS FOR ADMIN APPROVAL
+app.get('/users',verifyJWT, async(req, res)=>{
+  const adminEmail = req.tokenEmail;
+  const result= await usersCollection.find({email :{$ne: adminEmail}}).toArray();
+  res.send(result)
+})
 
 
 // GET CONTEST FOR ADMIN APPROVAL
@@ -118,6 +124,16 @@ app.patch('/approve-contests/:id', verifyJWT, async (req, res)=>{
   const result = await contestsCollection.updateOne(
     {_id: new ObjectId(id)},
     {$set: {status: 'approved'}}
+  )
+  res.send(result)
+
+})
+// CHANGE USER ROLE BY ADMIN
+app.patch('/update-role', verifyJWT, async (req, res)=>{
+  const {email, role} = req.body;
+  const result = await usersCollection.updateOne(
+    {email},
+    {$set: {role}}
   )
   res.send(result)
 
