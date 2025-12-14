@@ -54,28 +54,7 @@ const verifyJWT = async (req, res, next) => {
   }
 };
 
-// ROLE MIDDLEWARES 
-  
-    const verifyADMIN = async (req, res, next) => {
-      const email = req.tokenEmail
-      const user = await usersCollection.findOne({ email })
-      if (user?.role !== 'admin')
-        return res
-          .status(403)
-          .send({ message: 'Admin only Actions!', role: user?.role })
 
-      next()
-    }
-    const verifyCREATOR = async (req, res, next) => {
-      const email = req.tokenEmail
-      const user = await usersCollection.findOne({ email })
-      if (user?.role !== 'creator')
-        return res
-          .status(403)
-          .send({ message: 'Creator only Actions!', role: user?.role })
-
-      next()
-    }
 
 // MONGODB CONNECTION
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.nma65uq.mongodb.net/?appName=Cluster0`;
@@ -94,6 +73,8 @@ async function run() {
   const usersCollection = db.collection('user');
   const contestsCollection = db.collection('contest');
   const ordersCollection = db.collection('orders');
+  const submissionsCollection = db.collection('submissions');
+
 
 // SAVE CONTESTS POSTED BY CREATOR
 
@@ -143,7 +124,7 @@ app.get('/contests/:id', async(req, res)=>{
 })
 
 // APPROVE CONTESTS BY ADMIN
-app.patch('/approve-contests/:id', verifyJWT, verifyADMIN, async (req, res)=>{
+app.patch('/approve-contests/:id', verifyJWT, async (req, res)=>{
   const id = req.params.id;
   const result = await contestsCollection.updateOne(
     {_id: new ObjectId(id)},
@@ -153,7 +134,7 @@ app.patch('/approve-contests/:id', verifyJWT, verifyADMIN, async (req, res)=>{
 
 })
 // CHANGE USER ROLE BY ADMIN
-app.patch('/update-role', verifyJWT, verifyADMIN, async (req, res)=>{
+app.patch('/update-role', verifyJWT, async (req, res)=>{
   const {email, role} = req.body;
   const result = await usersCollection.updateOne(
     {email},
@@ -185,12 +166,10 @@ app.patch('/update-role', verifyJWT, verifyADMIN, async (req, res)=>{
   });
 
   //  GET USER ROLE
-  app.get('/user/role', verifyJWT, async (req, res) => {
-    const email = req.params.email;
-    const result = await usersCollection.findOne({ email: req.tokenEmail });
-
-    res.send({ role: result?.role || 'user' });
-  });
+app.get('/user/role', verifyJWT, async (req, res) => {
+  const result = await usersCollection.findOne({ email: req.tokenEmail });
+  res.send({ role: result?.role || 'user' });
+});
 
   // GET USER'S PARTICIPATED CONTESTS
 app.get('/my-joined-contests', verifyJWT, async (req, res) => {
@@ -203,12 +182,135 @@ app.get('/my-joined-contests', verifyJWT, async (req, res) => {
 })
 
 // GET CREATOR'S CREATED CONTEST
-app.get('/handle-contests/:email', async(req, res)=>{
-  const email = req.params.email;
-  const result = await contestsCollection.find({'creator.email': email}).toArray();
-  res.send(result)
 
-})
+app.get('/handle-contests/:email', verifyJWT, async (req, res) => {
+  const email = req.params.email;
+
+  if (req.tokenEmail !== email) {
+    return res.status(403).send({ message: "Forbidden" });
+  }
+
+  const result = await contestsCollection.find({ 'creator.email': email }).toArray();
+  res.send(result);
+});
+
+// POST REQUEST FOR SUBMISSION OF THE TASK
+
+app.post('/submissions', verifyJWT, async (req, res) => {
+  const { contestId, text, link } = req.body;
+  const email = req.tokenEmail;
+
+  if (!contestId) return res.status(400).send({ message: "contestId required" });
+  if (!text && !link) {
+    return res.status(400).send({ message: "Submission text or link required" });
+  }
+
+  const contest = await contestsCollection.findOne({ _id: new ObjectId(contestId) });
+  if (!contest) return res.status(404).send({ message: "Contest not found" });
+
+  //  block if contest ended
+  if (contest.deadline && new Date(contest.deadline) <= new Date()) {
+    return res.status(409).send({ message: "Contest ended. Submission closed." });
+  }
+
+  //  block if not paid
+  const paidOrder = await ordersCollection.findOne({
+    contestId: String(contestId),
+    customer: email,
+    status: "Paid",
+  });
+  if (!paidOrder) {
+    return res.status(403).send({ message: "You must register/pay before submitting" });
+  }
+
+  // save or update submission
+  const submission = {
+    contestId: String(contestId),
+    contestantEmail: email,
+    text: text || "",
+    link: link || "",
+    updatedAt: new Date().toISOString(),
+  };
+
+  await submissionsCollection.updateOne(
+    { contestId: String(contestId), contestantEmail: email },
+    {
+      $set: submission,
+      $setOnInsert: { createdAt: new Date().toISOString() },
+    },
+    { upsert: true }
+  );
+
+  res.send({ success: true });
+});
+
+// GET SUBMISSION FORM
+app.get('/creator/submissions', verifyJWT, async (req, res) => {
+  try {
+    const { contestId } = req.query;
+    if (!contestId) return res.status(400).send({ message: "contestId required" });
+
+    const contest = await contestsCollection.findOne({ _id: new ObjectId(contestId) });
+    if (!contest) return res.status(404).send({ message: "Contest not found" });
+
+    const user = await usersCollection.findOne({ email: req.tokenEmail });
+    const isAdmin = user?.role === "admin";
+    const isCreator = contest?.creator?.email === req.tokenEmail;
+
+    if (!isAdmin && !isCreator) return res.status(403).send({ message: "Forbidden" });
+
+    const submissions = await submissionsCollection
+      .find({ contestId: String(contestId) })
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    res.send(submissions);
+  } catch (err) {
+    res.status(500).send({ message: "Failed to load submissions", error: err.message });
+  }
+});
+
+//DECLARE WINNER BY CREATOR FOR A CONTEST
+app.patch('/contests/:id/declare-winner', verifyJWT, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { name, image, email } = req.body;
+
+    const contest = await contestsCollection.findOne({ _id: new ObjectId(id) });
+    if (!contest) return res.status(404).send({ message: "Contest not found" });
+
+    // block re-declare
+    if (contest?.winnerDeclared) {
+      return res.status(409).send({ message: "Winner already declared" });
+    }
+
+    const user = await usersCollection.findOne({ email: req.tokenEmail });
+    const isCreator = contest?.creator?.email === req.tokenEmail;
+    const isAdmin = user?.role === "admin";
+
+    if (!isCreator && !isAdmin) {
+      return res.status(403).send({ message: "Forbidden" });
+    }
+
+    const result = await contestsCollection.updateOne(
+      { _id: new ObjectId(id), winnerDeclared: { $ne: true } }, // ✅ extra safety
+      {
+        $set: {
+          winnerDeclared: true,
+          winner: { name, image, email, declaredAt: new Date().toISOString() },
+        },
+      }
+    );
+
+    if (result.modifiedCount === 0) {
+      return res.status(409).send({ message: "Winner already declared" });
+    }
+
+    res.send(result);
+  } catch (err) {
+    res.status(500).send({ message: "Failed to declare winner", error: err.message });
+  }
+});
 
 // PAYMENT ENDPOINTS
 
