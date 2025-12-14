@@ -33,6 +33,7 @@ try {
   console.error(' Firebase Admin Init Failed:', err.message);
   process.exit(1);
 }
+   
 
 //  JWT MIDDLEWARE
 const verifyJWT = async (req, res, next) => {
@@ -52,6 +53,29 @@ const verifyJWT = async (req, res, next) => {
     return res.status(401).send({ message: 'Unauthorized Access!', err });
   }
 };
+
+// ROLE MIDDLEWARES 
+  
+    const verifyADMIN = async (req, res, next) => {
+      const email = req.tokenEmail
+      const user = await usersCollection.findOne({ email })
+      if (user?.role !== 'admin')
+        return res
+          .status(403)
+          .send({ message: 'Admin only Actions!', role: user?.role })
+
+      next()
+    }
+    const verifyCREATOR = async (req, res, next) => {
+      const email = req.tokenEmail
+      const user = await usersCollection.findOne({ email })
+      if (user?.role !== 'creator')
+        return res
+          .status(403)
+          .send({ message: 'Creator only Actions!', role: user?.role })
+
+      next()
+    }
 
 // MONGODB CONNECTION
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.nma65uq.mongodb.net/?appName=Cluster0`;
@@ -119,7 +143,7 @@ app.get('/contests/:id', async(req, res)=>{
 })
 
 // APPROVE CONTESTS BY ADMIN
-app.patch('/approve-contests/:id', verifyJWT, async (req, res)=>{
+app.patch('/approve-contests/:id', verifyJWT, verifyADMIN, async (req, res)=>{
   const id = req.params.id;
   const result = await contestsCollection.updateOne(
     {_id: new ObjectId(id)},
@@ -129,7 +153,7 @@ app.patch('/approve-contests/:id', verifyJWT, async (req, res)=>{
 
 })
 // CHANGE USER ROLE BY ADMIN
-app.patch('/update-role', verifyJWT, async (req, res)=>{
+app.patch('/update-role', verifyJWT, verifyADMIN, async (req, res)=>{
   const {email, role} = req.body;
   const result = await usersCollection.updateOne(
     {email},
@@ -169,12 +193,15 @@ app.patch('/update-role', verifyJWT, async (req, res)=>{
   });
 
   // GET USER'S PARTICIPATED CONTESTS
-app.get('/my-contests', verifyJWT, async(req, res)=>{
-  
-  const result = await ordersCollection.find({customer: req.tokenEmail}).toArray();
-  res.send(result)
+app.get('/my-joined-contests', verifyJWT, async (req, res) => {
+  const result = await ordersCollection
+    .find({ customer: req.tokenEmail })
+    .sort({ deadline: -1 })   
+    .toArray();
 
+  res.send(result);
 })
+
 // GET CREATOR'S CREATED CONTEST
 app.get('/handle-contests/:email', async(req, res)=>{
   const email = req.params.email;
@@ -261,7 +288,7 @@ app.post('/payment-success', async (req, res) => {
         contestId: session.metadata.contestId,
         transactionId: session.payment_intent,
         customer: session.metadata.customer,
-        status: 'pending',
+        status: 'Paid',
         creator: contest.creator,
         name: contest.name,
         image:contest?.image,
