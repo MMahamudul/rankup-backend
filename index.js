@@ -375,6 +375,52 @@ app.get("/my-winning-contests", verifyJWT, async (req, res) => {
   }
 });
 
+//GET USER PROFILE FROM DB
+app.get("/me", verifyJWT, async (req, res) => {
+  const email = req.tokenEmail;
+  const me = await usersCollection.findOne({ email });
+  if (!me) return res.status(404).send({ message: "User not found" });
+  res.send(me);
+});
+ // UPDATE PROFILE
+ app.patch("/me", verifyJWT, async (req, res) => {
+  const email = req.tokenEmail;
+  const { name, image, bio, address } = req.body;
+
+  const updateDoc = {
+    ...(name !== undefined && { name }),
+    ...(image !== undefined && { image }),
+    ...(bio !== undefined && { bio }),
+    ...(address !== undefined && { address }),
+    updatedAt: new Date().toISOString(),
+  };
+
+  const result = await usersCollection.updateOne(
+    { email },
+    { $set: updateDoc }
+  );
+
+  res.send(result);
+});
+// GET USER WIN STAT 
+app.get("/me/stats", verifyJWT, async (req, res) => {
+  const email = req.tokenEmail;
+
+  const participated = await ordersCollection.countDocuments({
+    customer: email,
+    status: "Paid",
+  });
+
+  const won = await contestsCollection.countDocuments({
+    winnerDeclared: true,
+    "winner.email": email,
+  });
+
+  const winPercentage = participated > 0 ? Math.round((won / participated) * 100) : 0;
+
+  res.send({ participated, won, winPercentage });
+});
+
 
 // PAYMENT ENDPOINTS
 
