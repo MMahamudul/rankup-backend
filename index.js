@@ -93,7 +93,43 @@ app.post('/add-contest', verifyJWT, async (req, res) => {
   const result = await contestsCollection.insertOne(contestData);
   res.send(result);
 });
+// UPDATE CONTESTS BEFORE APPROVAL
+app.patch("/contests/:id", verifyJWT, async (req, res) => {
+  const id = req.params.id;
+  const updatedData = req.body;
 
+  const contest = await contestsCollection.findOne({ _id: new ObjectId(id) });
+  if (!contest) return res.status(404).send({ message: "Contest not found" });
+
+  if (contest.creator.email !== req.tokenEmail) {
+    return res.status(403).send({ message: "Forbidden" });
+  }
+
+  const result = await contestsCollection.updateOne(
+    { _id: new ObjectId(id) },
+    { $set: updatedData }
+  );
+
+  res.send(result);
+});
+
+// DELETE CONTESTS BEFORE APPROVAL
+app.delete("/contests/:id", verifyJWT, async (req, res) => {
+  const id = req.params.id;
+
+  const contest = await contestsCollection.findOne({ _id: new ObjectId(id) });
+  if (!contest) return res.status(404).send({ message: "Contest not found" });
+
+  if (contest.creator.email !== req.tokenEmail) {
+    return res.status(403).send({ message: "Forbidden" });
+  }
+
+  const result = await contestsCollection.deleteOne({
+    _id: new ObjectId(id),
+  });
+
+  res.send(result);
+});
 
 // GET ALL APPROVED CONTESTS TO ALL CONTEST PAGE
 app.get('/all-contests',verifyJWT, async(req, res)=>{
