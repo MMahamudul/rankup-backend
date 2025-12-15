@@ -197,52 +197,57 @@ app.get('/handle-contests/:email', verifyJWT, async (req, res) => {
 // POST REQUEST FOR SUBMISSION OF THE TASK
 
 app.post('/submissions', verifyJWT, async (req, res) => {
-  const { contestId, text, link } = req.body;
-  const email = req.tokenEmail;
+  try {
+    const { contestId, text, link } = req.body;
+    const email = req.tokenEmail;
 
-  if (!contestId) return res.status(400).send({ message: "contestId required" });
-  if (!text && !link) {
-    return res.status(400).send({ message: "Submission text or link required" });
+    if (!contestId) return res.status(400).send({ message: "contestId required" });
+    if (!text && !link) return res.status(400).send({ message: "Provide text or link" });
+
+    const contest = await contestsCollection.findOne({ _id: new ObjectId(contestId) });
+    if (!contest) return res.status(404).send({ message: "Contest not found" });
+
+    // block if contest ended
+    if (contest.deadline && new Date(contest.deadline) <= new Date()) {
+      return res.status(409).send({ message: "Contest ended. Submission closed." });
+    }
+
+    // must be paid
+    const paidOrder = await ordersCollection.findOne({
+      contestId: String(contestId),
+      customer: email,
+      status: "Paid",
+    });
+    if (!paidOrder) return res.status(403).send({ message: "Pay first, then submit." });
+
+    //  get user data (optional but recommended)
+    const userDoc = await usersCollection.findOne({ email });
+
+    const submissionDoc = {
+      contestId: String(contestId),
+      contestantEmail: email, 
+      contestantName: userDoc?.name || userDoc?.displayName || email,
+      contestantPhoto: userDoc?.image || userDoc?.photoURL || null,
+      text: text || "",
+      link: link || "",
+      updatedAt: new Date().toISOString(),
+    };
+
+    await submissionsCollection.updateOne(
+      { contestId: String(contestId), contestantEmail: email },
+      {
+        $set: submissionDoc,
+        $setOnInsert: { createdAt: new Date().toISOString() },
+      },
+      { upsert: true }
+    );
+
+    res.send({ success: true });
+  } catch (err) {
+    res.status(500).send({ message: "Failed to submit", error: err.message });
   }
-
-  const contest = await contestsCollection.findOne({ _id: new ObjectId(contestId) });
-  if (!contest) return res.status(404).send({ message: "Contest not found" });
-
-  //  block if contest ended
-  if (contest.deadline && new Date(contest.deadline) <= new Date()) {
-    return res.status(409).send({ message: "Contest ended. Submission closed." });
-  }
-
-  //  block if not paid
-  const paidOrder = await ordersCollection.findOne({
-    contestId: String(contestId),
-    customer: email,
-    status: "Paid",
-  });
-  if (!paidOrder) {
-    return res.status(403).send({ message: "You must register/pay before submitting" });
-  }
-
-  // save or update submission
-  const submission = {
-    contestId: String(contestId),
-    contestantEmail: email,
-    text: text || "",
-    link: link || "",
-    updatedAt: new Date().toISOString(),
-  };
-
-  await submissionsCollection.updateOne(
-    { contestId: String(contestId), contestantEmail: email },
-    {
-      $set: submission,
-      $setOnInsert: { createdAt: new Date().toISOString() },
-    },
-    { upsert: true }
-  );
-
-  res.send({ success: true });
 });
+
 
 // GET SUBMISSION FORM
 app.get('/creator/submissions', verifyJWT, async (req, res) => {
@@ -284,6 +289,12 @@ app.patch('/contests/:id/declare-winner', verifyJWT, async (req, res) => {
       return res.status(409).send({ message: "Winner already declared" });
     }
 
+    // block declaring winner before deadline
+    if (contest.deadline && new Date(contest.deadline) > new Date()) {
+      return res.status(409).send({ message: "You can't declare winner before deadline." });
+    }
+
+    // only creator/admin can declare
     const user = await usersCollection.findOne({ email: req.tokenEmail });
     const isCreator = contest?.creator?.email === req.tokenEmail;
     const isAdmin = user?.role === "admin";
@@ -293,7 +304,7 @@ app.patch('/contests/:id/declare-winner', verifyJWT, async (req, res) => {
     }
 
     const result = await contestsCollection.updateOne(
-      { _id: new ObjectId(id), winnerDeclared: { $ne: true } }, // ✅ extra safety
+      { _id: new ObjectId(id), winnerDeclared: { $ne: true } },
       {
         $set: {
           winnerDeclared: true,
@@ -311,6 +322,23 @@ app.patch('/contests/:id/declare-winner', verifyJWT, async (req, res) => {
     res.status(500).send({ message: "Failed to declare winner", error: err.message });
   }
 });
+
+// WINNING CONTESTS BY USER
+app.get("/my-winning-contests", verifyJWT, async (req, res) => {
+  try {
+    const email = req.tokenEmail;
+
+    const result = await contestsCollection
+      .find({ winnerDeclared: true, "winner.email": email })
+      .sort({ "winner.declaredAt": -1 })
+      .toArray();
+
+    res.send(result);
+  } catch (err) {
+    res.status(500).send({ message: "Failed to load winning contests", error: err.message });
+  }
+});
+
 
 // PAYMENT ENDPOINTS
 
