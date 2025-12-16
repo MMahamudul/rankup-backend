@@ -93,6 +93,38 @@ app.post('/add-contest', verifyJWT, async (req, res) => {
   const result = await contestsCollection.insertOne(contestData);
   res.send(result);
 });
+//BANNER  SEARCH CONTESTS (by category or name)
+
+app.get("/contests/search", async (req, res) => {
+  try {
+    const q = (req.query.q || "").trim();
+
+    if (!q) return res.send([]);
+
+    const result = await contestsCollection
+      .find({
+        status: "approved",
+        $or: [
+          { category: { $regex: q, $options: "i" } },
+          { name: { $regex: q, $options: "i" } },
+        ],
+      })
+      .toArray();
+
+    res.send(result);
+  } catch (err) {
+    console.error("Search error:", err);
+    res.status(500).send({ message: "Search failed", error: err.message });
+  }
+});
+
+// CONTEST DETAILS PAGE
+
+app.get('/contests/:id', async(req, res)=>{
+  const id = req.params.id
+  const result= await contestsCollection.findOne({_id: new ObjectId(id)});
+  res.send(result)
+})
 // UPDATE CONTESTS BEFORE APPROVAL
 app.patch("/contests/:id", verifyJWT, async (req, res) => {
   const id = req.params.id;
@@ -132,7 +164,7 @@ app.delete("/contests/:id", verifyJWT, async (req, res) => {
 });
 
 // GET ALL APPROVED CONTESTS TO ALL CONTEST PAGE
-app.get('/all-contests',verifyJWT, async(req, res)=>{
+app.get('/all-contests', async(req, res)=>{
   const result= await contestsCollection.find({ status: "approved" }).toArray();
   res.send(result)
 })
@@ -151,13 +183,9 @@ app.get('/manage-contest',verifyJWT, async(req, res)=>{
   res.send(result)
 })
 
-// CONTEST DETAILS PAGE
 
-app.get('/contests/:id', async(req, res)=>{
-  const id = req.params.id
-  const result= await contestsCollection.findOne({_id: new ObjectId(id)});
-  res.send(result)
-})
+
+
 
 // APPROVE CONTESTS BY ADMIN
 app.patch('/approve-contests/:id', verifyJWT, async (req, res)=>{
@@ -540,7 +568,20 @@ app.post('/payment-success', async (req, res) => {
   }
 });
 
+// POPULAR CONTESTS
+app.get("/popular-contests", async (req, res) => {
+  try {
+    const result = await contestsCollection
+      .find({ status: "approved" })
+      .sort({ participant: -1 })
+      .limit(5)
+      .toArray();
 
+    res.send(result);
+  } catch (err) {
+    res.status(500).send({ message: "Failed to load popular contests" });
+  }
+});
 
   console.log(' MongoDB connected');
 }
