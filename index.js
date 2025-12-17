@@ -20,7 +20,7 @@ app.use(express.json());
 //  FIREBASE ADMIN INIT 
 try {
   const decoded = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString('utf-8');
-  console.log(' Firebase key loaded');
+  // console.log(' Firebase key loaded');
 
   const serviceAccount = JSON.parse(decoded);
 
@@ -67,7 +67,7 @@ const client = new MongoClient(uri, {
 });
 
 async function run() {
-  await client.connect();
+  // await client.connect();
 
   const db = client.db('contestDB');
   const usersCollection = db.collection('user');
@@ -203,8 +203,6 @@ app.get("/users", verifyJWT, async (req, res) => {
     });
   }
 });
-
-
 
 // GET CONTEST FOR ADMIN APPROVAL
 
@@ -451,7 +449,6 @@ app.get("/leaderboard", async (req, res) => {
   res.send(leaderboard);
 });
 
-
 //GET USER PROFILE FROM DB
 app.get("/me", verifyJWT, async (req, res) => {
   const email = req.tokenEmail;
@@ -537,8 +534,6 @@ app.get("/winners/highlights", async (req, res) => {
     res.status(500).send({ message: "Failed to load winners" });
   }
 });
-
-
 
 // PAYMENT ENDPOINTS
 
