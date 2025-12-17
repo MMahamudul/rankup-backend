@@ -169,11 +169,41 @@ app.get('/all-contests', async(req, res)=>{
   res.send(result)
 })
 // GET ALL USERS FOR ADMIN APPROVAL
-app.get('/users',verifyJWT, async(req, res)=>{
-  const adminEmail = req.tokenEmail;
-  const result= await usersCollection.find({email :{$ne: adminEmail}}).toArray();
-  res.send(result)
-})
+// GET ALL USERS (ADMIN) WITH PAGINATION
+app.get("/users", verifyJWT, async (req, res) => {
+  try {
+    const adminEmail = req.tokenEmail;
+
+    const page = Math.max(parseInt(req.query.page || "1"), 1);
+    const limit = Math.max(parseInt(req.query.limit || "10"), 1);
+    const skip = (page - 1) * limit;
+
+    const filter = { email: { $ne: adminEmail } };
+
+    const total = await usersCollection.countDocuments(filter);
+
+    const users = await usersCollection
+      .find(filter)
+      .sort({ created_at: -1 })
+      .skip(skip)
+      .limit(limit)
+      .toArray();
+
+    res.send({
+      users,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    });
+  } catch (err) {
+    res.status(500).send({
+      message: "Failed to load users",
+      error: err.message,
+    });
+  }
+});
+
 
 
 // GET CONTEST FOR ADMIN APPROVAL
@@ -182,8 +212,6 @@ app.get('/manage-contest',verifyJWT, async(req, res)=>{
   const result= await contestsCollection.find({ status: "pending" }).toArray();
   res.send(result)
 })
-
-
 
 
 
@@ -403,6 +431,27 @@ app.get("/my-winning-contests", verifyJWT, async (req, res) => {
   }
 });
 
+//LEADERBOARD
+app.get("/leaderboard", async (req, res) => {
+  const leaderboard = await contestsCollection.aggregate([
+    { $match: { winnerDeclared: true } },
+    {
+      $group: {
+        _id: "$winner.email",
+        name: { $first: "$winner.name" },
+        image: { $first: "$winner.image" },
+        wins: { $sum: 1 },
+        totalPrize: { $sum: "$prize" },
+      },
+    },
+    { $sort: { wins: -1 } },
+    { $limit: 20 },
+  ]).toArray();
+
+  res.send(leaderboard);
+});
+
+
 //GET USER PROFILE FROM DB
 app.get("/me", verifyJWT, async (req, res) => {
   const email = req.tokenEmail;
@@ -448,6 +497,47 @@ app.get("/me/stats", verifyJWT, async (req, res) => {
 
   res.send({ participated, won, winPercentage });
 });
+// WINNER ADVERTISEMENT (HOME SECTION)
+
+app.get("/winners/highlights", async (req, res) => {
+  try {
+    // recent winners
+    const recentWinners = await contestsCollection
+      .find({ winnerDeclared: true })
+      .sort({ "winner.declaredAt": -1 })
+      .limit(6)
+      .project({
+        name: 1,
+        prize: 1,
+        image: 1,
+        "winner.name": 1,
+        "winner.image": 1,
+        "winner.declaredAt": 1,
+      })
+      .toArray();
+
+    // stats
+    const totalWinners = await contestsCollection.countDocuments({
+      winnerDeclared: true,
+    });
+
+    const prizeAgg = await contestsCollection.aggregate([
+      { $match: { winnerDeclared: true } },
+      { $group: { _id: null, totalPrize: { $sum: "$prize" } } },
+    ]).toArray();
+
+    res.send({
+      recentWinners,
+      stats: {
+        totalWinners,
+        totalPrize: prizeAgg[0]?.totalPrize || 0,
+      },
+    });
+  } catch (err) {
+    res.status(500).send({ message: "Failed to load winners" });
+  }
+});
+
 
 
 // PAYMENT ENDPOINTS
