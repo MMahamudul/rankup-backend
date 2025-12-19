@@ -54,7 +54,6 @@ const verifyJWT = async (req, res, next) => {
   }
 };
 
-// CLIENT_DOMAIN=https://rankup-7cd7e.web.app
 
 // MONGODB CONNECTION
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.nma65uq.mongodb.net/?appName=Cluster0`;
@@ -67,7 +66,7 @@ const client = new MongoClient(uri, {
 });
 
 async function run() {
-  await client.connect();
+  // await client.connect();
 
   const db = client.db('contestDB');
   const usersCollection = db.collection('user');
