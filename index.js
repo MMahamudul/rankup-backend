@@ -54,7 +54,7 @@ const verifyJWT = async (req, res, next) => {
   }
 };
 
-
+// CLIENT_DOMAIN=https://rankup-7cd7e.web.app
 
 // MONGODB CONNECTION
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.nma65uq.mongodb.net/?appName=Cluster0`;
@@ -67,7 +67,7 @@ const client = new MongoClient(uri, {
 });
 
 async function run() {
-  // await client.connect();
+  await client.connect();
 
   const db = client.db('contestDB');
   const usersCollection = db.collection('user');
@@ -120,11 +120,16 @@ app.get("/contests/search", async (req, res) => {
 
 // CONTEST DETAILS PAGE
 
-app.get('/contests/:id', async(req, res)=>{
-  const id = req.params.id
-  const result= await contestsCollection.findOne({_id: new ObjectId(id)});
-  res.send(result)
-})
+app.get("/contests/:id", async (req, res) => {
+  try {
+    const contest = await contestsCollection.findOne({ _id: new ObjectId(req.params.id) });
+    if (!contest) return res.status(404).send({ message: "Contest not found" });
+    res.send(contest);
+  } catch (err) {
+    res.status(500).send({ message: "Failed to load contest" });
+  }
+});
+
 // UPDATE CONTESTS BEFORE APPROVAL
 app.patch("/contests/:id", verifyJWT, async (req, res) => {
   const id = req.params.id;
@@ -262,14 +267,16 @@ app.get('/user/role', verifyJWT, async (req, res) => {
 });
 
   // GET USER'S PARTICIPATED CONTESTS
-app.get('/my-joined-contests', verifyJWT, async (req, res) => {
-  const result = await ordersCollection
-    .find({ customer: req.tokenEmail })
-    .sort({ deadline: -1 })   
-    .toArray();
+app.get("/my-joined-contests", verifyJWT, async (req, res) => {
+  try {
+    const email = req.tokenEmail; 
+    const orders = await ordersCollection.find({ customer: email }).toArray();
+    res.send(orders);
+  } catch (err) {
+    res.status(500).send({ message: "Failed to load joined contests" });
+  }
+});
 
-  res.send(result);
-})
 
 // GET CREATOR'S CREATED CONTEST
 
@@ -286,55 +293,46 @@ app.get('/handle-contests/:email', verifyJWT, async (req, res) => {
 
 // POST REQUEST FOR SUBMISSION OF THE TASK
 
-app.post('/submissions', verifyJWT, async (req, res) => {
+app.post("/submissions", verifyJWT, async (req, res) => {
   try {
+    const email = req.tokenEmail; // correct
     const { contestId, text, link } = req.body;
-    const email = req.tokenEmail;
 
-    if (!contestId) return res.status(400).send({ message: "contestId required" });
-    if (!text && !link) return res.status(400).send({ message: "Provide text or link" });
+    if (!contestId) return res.status(400).send({ message: "Missing contestId" });
 
-    const contest = await contestsCollection.findOne({ _id: new ObjectId(contestId) });
-    if (!contest) return res.status(404).send({ message: "Contest not found" });
-
-    // block if contest ended
-    if (contest.deadline && new Date(contest.deadline) <= new Date()) {
-      return res.status(409).send({ message: "Contest ended. Submission closed." });
-    }
-
-    // must be paid
-    const paidOrder = await ordersCollection.findOne({
+    // ensure paid
+    const paid = await ordersCollection.findOne({
       contestId: String(contestId),
       customer: email,
       status: "Paid",
     });
-    if (!paidOrder) return res.status(403).send({ message: "Pay first, then submit." });
 
-    //  get user data (optional but recommended)
-    const userDoc = await usersCollection.findOne({ email });
+    if (!paid) return res.status(403).send({ message: "You must register/pay before submitting." });
 
-    const submissionDoc = {
+    const payload = {
       contestId: String(contestId),
-      contestantEmail: email, 
-      contestantName: userDoc?.name || userDoc?.displayName || email,
-      contestantPhoto: userDoc?.image || userDoc?.photoURL || null,
-      text: text || "",
-      link: link || "",
+      userEmail: email,
+      text: (text || "").trim(),
+      link: (link || "").trim(),
       updatedAt: new Date().toISOString(),
     };
 
-    await submissionsCollection.updateOne(
-      { contestId: String(contestId), contestantEmail: email },
-      {
-        $set: submissionDoc,
-        $setOnInsert: { createdAt: new Date().toISOString() },
-      },
-      { upsert: true }
-    );
+    const existing = await submissionsCollection.findOne({
+      contestId: String(contestId),
+      userEmail: email,
+    });
 
-    res.send({ success: true });
+    if (existing) {
+      await submissionsCollection.updateOne({ _id: existing._id }, { $set: payload });
+      return res.send({ success: true, message: "Submission updated" });
+    }
+
+    payload.createdAt = new Date().toISOString();
+    await submissionsCollection.insertOne(payload);
+    return res.send({ success: true, message: "Submission created" });
   } catch (err) {
-    res.status(500).send({ message: "Failed to submit", error: err.message });
+    console.error(err);
+    res.status(500).send({ message: "Failed to submit" });
   }
 });
 
@@ -362,6 +360,27 @@ app.get('/creator/submissions', verifyJWT, async (req, res) => {
     res.send(submissions);
   } catch (err) {
     res.status(500).send({ message: "Failed to load submissions", error: err.message });
+  }
+});
+// HANDLE SUBMISSION
+app.get("/submissions/me", verifyJWT, async (req, res) => {
+  try {
+    const email = req.tokenEmail;
+    const { contestId } = req.query;
+
+    if (!contestId) {
+      return res.status(400).send({ message: "Missing contestId" });
+    }
+
+    const submission = await submissionsCollection.findOne({
+      contestId: String(contestId),
+      userEmail: email,
+    });
+
+    res.send(submission || null);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ message: "Failed to load submission" });
   }
 });
 
@@ -538,37 +557,41 @@ app.get("/winners/highlights", async (req, res) => {
 // PAYMENT ENDPOINTS
 
 app.post('/create-checkout-session', async (req, res) => {
-  
-  const paymentInfo = req.body;
-  
-  const session = await stripe.checkout.sessions.create({
-    line_items: [
-      {
-        
-        price_data: {
-          currency: 'usd',
-          product_data:{
-            name: paymentInfo?.name,
-            description: paymentInfo?.description,
-            images:[paymentInfo.image]
+  try {
+    const paymentInfo = req.body;
 
+    const session = await stripe.checkout.sessions.create({
+      line_items: [
+        {
+          price_data: {
+            currency: 'usd',
+            product_data: {
+              name: paymentInfo?.name,
+              description: paymentInfo?.description,
+              images: paymentInfo?.image ? [paymentInfo.image] : [],
+            },
+            unit_amount: Math.round(Number(paymentInfo?.price || 0) * 100),
           },
-          unit_amount: paymentInfo?.price * 100,
+          quantity: Number(paymentInfo?.quantity || 1),
         },
-        quantity: paymentInfo?.quantity,
+      ],
+      customer_email: paymentInfo?.customer?.email,
+      mode: 'payment',
+      metadata: {
+        contestId: String(paymentInfo?.contestId),
+        customer: String(paymentInfo?.customer?.email),
       },
-    ],
-    customer_email:paymentInfo?.customer?.email ,
-    mode: 'payment',
-    metadata: {
-      contestId: paymentInfo?.contestId,
-      customer: paymentInfo?.customer.email,
-    },
-    success_url: `${process.env.CLIENT_DOMAIN}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${process.env.CLIENT_DOMAIN}/contest/${paymentInfo?.contestId}`,
-  })
-  res.send({url:session.url})
-}) 
+      success_url: `${process.env.CLIENT_DOMAIN}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${process.env.CLIENT_DOMAIN}/contest/${paymentInfo?.contestId}`,
+    });
+
+    res.send({ url: session.url });
+  } catch (err) {
+    console.error("create-checkout-session error:", err);
+    res.status(500).send({ message: "Failed to create checkout session" });
+  }
+});
+ 
 
 // PAYMENT SUCCESS
 app.post('/payment-success', async (req, res) => {
@@ -576,27 +599,20 @@ app.post('/payment-success', async (req, res) => {
     const { session_id } = req.body;
 
     if (!session_id) {
-      return res.status(400).send({ message: 'Missing session_id' });
+      return res.status(400).send({ success: false, message: 'Missing session_id' });
     }
 
-    // 1) Get session info from Stripe
+    // 1) Retrieve session from Stripe
     const session = await stripe.checkout.sessions.retrieve(session_id);
 
-    // 2) Find the contest
-    const contest = await contestsCollection.findOne({
-      _id: new ObjectId(session.metadata.contestId),
-    });
+    const contestId = session?.metadata?.contestId;
+    const customerEmail = session?.metadata?.customer;
 
-    if (!contest) {
-      return res.status(404).send({ message: 'Contest not found' });
+    if (!contestId) {
+      return res.status(400).send({ success: false, message: "Missing contestId in session metadata" });
     }
 
-    // 3) Check if order already exists (important for refresh / double-call)
-    const existingOrder = await ordersCollection.findOne({
-      transactionId: session.payment_intent,
-    });
-
-    // 4) Only proceed if payment is paid
+    // 2) Ensure payment completed
     if (session.payment_status !== 'paid') {
       return res.status(400).send({
         success: false,
@@ -605,19 +621,32 @@ app.post('/payment-success', async (req, res) => {
       });
     }
 
+    // 3) Find contest
+    const contest = await contestsCollection.findOne({
+      _id: new ObjectId(contestId),
+    });
+
+    if (!contest) {
+      return res.status(404).send({ success: false, message: 'Contest not found' });
+    }
+
+    // 4) Idempotency: if user refreshes page, don’t create duplicate
+    const existingOrder = await ordersCollection.findOne({
+      transactionId: session.payment_intent,
+    });
+
     let orderId;
 
-    // 5) If no order yet -> create one & increment participant
     if (!existingOrder) {
       const orderInfo = {
-        contestId: session.metadata.contestId,
+        contestId, // keep as string
         transactionId: session.payment_intent,
-        customer: session.metadata.customer,
+        customer: customerEmail,
         status: 'Paid',
         creator: contest.creator,
         name: contest.name,
-        image:contest?.image,
-        deadline:contest?.deadline,
+        image: contest?.image,
+        deadline: contest?.deadline,
         category: contest.category,
         participant: 1,
         price: session.amount_total / 100,
@@ -625,33 +654,34 @@ app.post('/payment-success', async (req, res) => {
       };
 
       const result = await ordersCollection.insertOne(orderInfo);
-
-      // 6) Increment contest participant
-      await contestsCollection.updateOne(
-        { _id: new ObjectId(session.metadata.contestId) },
-        { $inc: { participant: 1 } }  
-      );
-
       orderId = result.insertedId;
+
+      // increment participant
+      await contestsCollection.updateOne(
+        { _id: new ObjectId(contestId) },
+        { $inc: { participant: 1 } }
+      );
     } else {
-      // If order already exists, just reuse its ID
       orderId = existingOrder._id;
     }
 
-    // 7) Always return success for a valid, paid session
+    //  return contestId for frontend redirect
     return res.send({
       success: true,
+      contestId,
       transactionId: session.payment_intent,
       orderId,
     });
   } catch (err) {
     console.error('Payment success error:', err);
     return res.status(500).send({
+      success: false,
       message: 'Internal Server Error while verifying payment',
       error: err.message,
     });
   }
 });
+
 
 // POPULAR CONTESTS
 app.get("/popular-contests", async (req, res) => {
